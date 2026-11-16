@@ -21,7 +21,9 @@ set -euo pipefail
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 DATA=${DATA:?set DATA to the folder for the training data}
 CORPUS=${CORPUS:-$DATA/corpus}
-WORKERS=${WORKERS:-$(nproc)}
+# nproc can report the host's cores inside a container; the cgroup quota is the real limit.
+WORKERS=${WORKERS:-$(python -m tiny_voca.cpus 2>/dev/null || nproc)}
+export OMP_NUM_THREADS=${OMP_NUM_THREADS:-$WORKERS} MKL_NUM_THREADS=${MKL_NUM_THREADS:-$WORKERS}
 DEVICE=${DEVICE:-cuda}
 QUALITY_CLIPS=${QUALITY_CLIPS:-10}
 QUALITY_DROP=${QUALITY_DROP:-0.2}

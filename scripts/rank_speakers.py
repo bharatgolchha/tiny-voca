@@ -73,7 +73,10 @@ def main(arguments=None, scorer=None):
                 done[record["id"]] = record["utmos"]
     if scorer is None:
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+        import torch
+        from tiny_voca.cpus import available_cpus
         from tiny_voca.scoreboard import Naturalness
+        torch.set_num_threads(available_cpus())      # not the host's core count: that thrashes in a container
         scorer = Naturalness(args.device)
     pending = [(speaker, row) for speaker, members in chosen.items() for row in members if row["id"] not in done]
     print(json.dumps({"speakers": len(chosen), "clips_to_score": len(pending), "already_scored": len(done)}), flush=True)

@@ -47,9 +47,13 @@ import math
 import os
 from pathlib import Path
 import re
+import sys
 
 import numpy as np
 import soundfile as sf
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from tiny_voca.cpus import available_cpus  # noqa: E402
 
 SETS = Path(__file__).resolve().parents[1] / "eval" / "sets"
 RATE = 24000
@@ -203,7 +207,7 @@ def main(arguments=None):
     parser.add_argument("--min-speaker-minutes", type=float, default=5.0)
     parser.add_argument("--validation-per-speaker", type=int, default=2)
     parser.add_argument("--min-validation-clips", type=int, default=50)
-    parser.add_argument("--workers", type=int, default=os.cpu_count())
+    parser.add_argument("--workers", type=int, default=available_cpus())
     args = parser.parse_args(arguments)
     if not args.libritts and not args.hifitts:
         parser.error("give --libritts, --hifitts or both")
