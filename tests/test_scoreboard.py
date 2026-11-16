@@ -131,6 +131,8 @@ class RunTest(unittest.TestCase):
         self.assertNotIn("voice_similarity", rows["old"])
         text = scoreboard.report_markdown(report)
         self.assertIn("| new | A | hard | 3 | 4.00 ± 0.00 | 0.0% | 0.600 | 1.000 | 20 |", text)
+        self.assertIn("## Word errors by kind of sentence: hard", text)
+        self.assertEqual(text.count("| old | B | 25.0% | 25.0% |"), 1)
 
     def test_resynthesis_replaces_the_row(self):
         clips = self.fake_run()

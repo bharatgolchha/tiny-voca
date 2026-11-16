@@ -537,10 +537,10 @@ def report_markdown(report):
         lines.append(f"| {row['system']} | {row['voice']} | {row['set']} | {row['clips']} | {mos} | {cell(row.get('wer'), 100, 1, '%')} | "
                      f"{cell(row.get('voice_similarity'), digits=3)} | {cell(row.get('voice_consistency'), digits=3)} | "
                      f"{cell(row.get('times_real_time'), digits=0)} |")
-    categories = [r for r in report["rows"] if r.get("wer_by_category")]
-    if categories:
+    for set_name_ in sorted({r["set"] for r in report["rows"] if r.get("wer_by_category")}):
+        categories = [r for r in report["rows"] if r["set"] == set_name_ and r.get("wer_by_category")]
         names = sorted({name for r in categories for name in r["wer_by_category"]})
-        lines += ["", "## Word errors by kind of sentence", "", "| System | Voice | " + " | ".join(names) + " |",
+        lines += ["", f"## Word errors by kind of sentence: {set_name_}", "", "| System | Voice | " + " | ".join(names) + " |",
                   "| --- | --- | " + " | ".join("---:" for _ in names) + " |"]
         for r in categories:
             lines.append(f"| {r['system']} | {r['voice']} | " + " | ".join(cell(r['wer_by_category'].get(n), 100, 1, '%') for n in names) + " |")
