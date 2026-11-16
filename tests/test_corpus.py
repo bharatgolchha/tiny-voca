@@ -45,7 +45,7 @@ class CorpusTest(unittest.TestCase):
 
     def libritts(self):
         subset = self.root / "LibriTTS_R" / "train-clean-100"
-        subset.mkdir(parents=True)
+        subset.mkdir(parents=True, exist_ok=True)
         (self.root / "LibriTTS_R" / "speakers.tsv").write_text("READER\tGENDER\tSUBSET\tNAME\n19\tF\ttrain-clean-100\tA\n"
                                                                "26\tM\ttrain-clean-100\tB\n")
         clips = {"19_198_000000_000000": ("Hello there, how are you today?", 3.0),
@@ -119,6 +119,32 @@ class CorpusTest(unittest.TestCase):
                          "--min-validation-clips", "3", "--validation-per-speaker", "1", "--workers", "2"])
         for name, content in first.items():
             self.assertEqual((output / name).read_bytes(), content, name)
+
+    def test_quality_ranking_leaves_out_the_worst_speakers(self):
+        output, _ = self.run_build()
+        ranking = importlib.import_module("rank_speakers")
+        calls = []
+
+        def scorer(paths):                       # the Hi-Fi TTS speaker sounds better than the LibriTTS one
+            calls.append(len(paths))
+            return {p: (4.0 if sf.info(p).duration < 2.5 else 2.5) for p in paths}
+        summary = ranking.main(["--corpus", str(output), "--clips", "2", "--drop-below", "3"], scorer=scorer)
+        self.assertEqual(summary["excluded"], 1)
+        self.assertEqual((output / "excluded-speakers.txt").read_text(), "ltr-19\n")
+        table = json.loads((output / "speaker-quality.json").read_text())
+        self.assertEqual([r["speaker"] for r in table], ["hifi-92", "ltr-19"])
+        ranking.main(["--corpus", str(output), "--clips", "2", "--drop-below", "3"], scorer=scorer)
+        self.assertEqual(calls, [4])                          # resumed: nothing scored twice
+        _, report = self.run_build("--exclude-speakers", str(output / "excluded-speakers.txt"))
+        self.assertEqual(report["speakers"]["total"], 1)
+        self.assertEqual(report["dropped"]["speaker left out for sound quality"], 2)
+
+    def test_rank_drop_fraction(self):
+        ranking = importlib.import_module("rank_speakers")
+        table, dropped = ranking.rank({"a": [4.0], "b": [3.0], "c": [2.0], "d": [3.5]}, None, 0.5)
+        self.assertEqual([r["speaker"] for r in table], ["a", "d", "b", "c"])
+        self.assertEqual(dropped, {"b", "c"})
+        self.assertEqual(ranking.rank({"a": [4.0]}, None, 0.0)[1], set())
 
     def test_prepare_accepts_the_rows(self):
         output, _ = self.run_build()

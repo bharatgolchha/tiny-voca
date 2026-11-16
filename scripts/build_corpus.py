@@ -13,7 +13,7 @@ What it does:
   ``<utterance>.normalized.txt``. The audio is used where it is.
 * Hi-Fi TTS (44.1 kHz): reads ``<speaker>_manifest_<quality>_<split>.json``
   (``--hifitts-quality clean`` by default) and resamples each clip to 24 kHz
-  16-bit FLAC under ``<output>/audio/hifi/``. Existing files are kept, so a
+  16-bit FLAC under ``<output>/audio/hifi/`` (or ``--audio-dir``). Existing files are kept, so a
   rerun only does the missing ones.
 * Drops clips shorter than ``--min-seconds`` or longer than ``--max-seconds``,
   with too few words, or whose text matches a sentence of the frozen test sets
@@ -21,7 +21,8 @@ What it does:
 * Holds out ``--validation-per-speaker`` clips of every speaker that has at
   least ``--min-validation-clips`` clips, chosen by a hash of the clip id among
   sentences read only once in the corpus (so no sentence is in both splits).
-* Drops speakers with less than ``--min-speaker-minutes`` of kept audio.
+* Drops speakers with less than ``--min-speaker-minutes`` of kept audio, and
+  those listed in ``--exclude-speakers``.
 
 Outputs, in ``--output``:
 
@@ -162,7 +163,7 @@ def resample(job):
     return {"seconds": len(wave) / RATE}
 
 
-def hifitts(root, output, quality, workers, keep):
+def hifitts(root, audio_dir, quality, workers, keep):
     root = Path(root).expanduser().resolve()
     rows, jobs = [], []
     for speaker, split, number, entry in hifitts_manifests(root, quality):
@@ -172,7 +173,7 @@ def hifitts(root, output, quality, workers, keep):
         text = " ".join(str(entry.get("text_normalized") or entry.get("text") or "").split())
         row = {"id": identifier, "voice_id": f"hifi-{speaker}", "text": text, "seconds": float(entry.get("duration", 0)),
                "origin": f"Hi-Fi TTS {quality} {split}", "source_id": str(entry["audio_filepath"]), "source_url": HIFITTS_URL,
-               "gender": None, "audio": str(output / "audio" / "hifi" / speaker / f"{identifier}.flac")}
+               "gender": None, "audio": str(audio_dir / "hifi" / speaker / f"{identifier}.flac")}
         if not text:
             row["drop"] = "no text"
         rows.append(row)
@@ -193,6 +194,8 @@ def main(arguments=None):
     parser.add_argument("--libritts", type=Path, nargs="*", default=[], help="LibriTTS-R subset folders, e.g. train-clean-100")
     parser.add_argument("--hifitts", type=Path, help="The hi_fi_tts_v0 folder with the *_manifest_*.json files")
     parser.add_argument("--hifitts-quality", default="clean", choices=("clean", "other"))
+    parser.add_argument("--exclude-speakers", type=Path, help="Text file of speaker ids to leave out (rank_speakers.py writes one)")
+    parser.add_argument("--audio-dir", type=Path, help="Where resampled Hi-Fi TTS audio goes (default <output>/audio); share it between builds")
     parser.add_argument("--sets", type=Path, default=SETS, help="Folder of frozen test sets whose sentences are kept out")
     parser.add_argument("--min-seconds", type=float, default=1.0)
     parser.add_argument("--max-seconds", type=float, default=20.0)
@@ -207,6 +210,8 @@ def main(arguments=None):
     output = args.output.expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     held_out = eval_texts(args.sets)
+    excluded = set(args.exclude_speakers.read_text(encoding="utf-8").split()) if args.exclude_speakers else set()
+    audio_dir = (args.audio_dir or output / "audio").expanduser().resolve()
 
     def reason(row):
         if row.get("drop"):
@@ -217,11 +222,13 @@ def main(arguments=None):
             return "too few words"
         if row["seconds"] and not args.min_seconds <= row["seconds"] <= args.max_seconds:
             return "too short or too long"
+        if row["voice_id"] in excluded:
+            return "speaker left out for sound quality"
         return None
 
     rows = libritts(args.libritts, args.workers)
     if args.hifitts:
-        rows += hifitts(args.hifitts, output, args.hifitts_quality, args.workers, lambda r: reason(r) is None)
+        rows += hifitts(args.hifitts, audio_dir, args.hifitts_quality, args.workers, lambda r: reason(r) is None)
     dropped = Counter()
     kept = defaultdict(list)
     for row in rows:
@@ -275,7 +282,8 @@ def main(arguments=None):
                            "by_gender": dict(Counter(str(s["gender"]) for s in speakers))},
               "dropped": dict(sorted(dropped.items())), "test_sentences_kept_out": len(held_out),
               "limits": {k: getattr(args, k) for k in ("min_seconds", "max_seconds", "min_words", "min_speaker_minutes",
-                                                     "validation_per_speaker", "min_validation_clips", "hifitts_quality")}}
+                                                     "validation_per_speaker", "min_validation_clips", "hifitts_quality")},
+              "speakers_excluded": sorted(excluded)}
     (output / "report.json").write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=1))
     return report
