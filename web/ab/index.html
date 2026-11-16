@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blind listening test</title>
+<style>
+  :root { --bg: #fafaf9; --fg: #1c1917; --muted: #57534e; --line: #d6d3d1; --accent: #2563eb; --card: #ffffff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --accent: #60a5fa; --card: #292524; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px; margin-top: 20px; }
+  .text { font-size: 18px; margin: 0 0 16px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  button { font: inherit; border: 1px solid var(--line); background: transparent; color: var(--fg); border-radius: 8px;
+           padding: 10px 16px; cursor: pointer; flex: 1 1 140px; }
+  button.play.done { border-color: var(--accent); }
+  button.choice { border-color: var(--accent); }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button:not(:disabled):hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .bar { height: 4px; background: var(--line); border-radius: 2px; margin-top: 12px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--accent); width: 0; }
+  table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+  td, th { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  kbd { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Blind listening test</h1>
+  <p class="muted" id="intro">Listen to both samples, then pick the one that sounds more natural. Keys: <kbd>1</kbd> and <kbd>2</kbd> play,
+    <kbd>F</kbd> picks the first, <kbd>J</kbd> the second, <kbd>space</kbd> means you can't tell.</p>
+  <div id="app" class="card">Loading…</div>
+</main>
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+const name = params.get("test");
+const app = document.getElementById("app");
+let test, answers = [], audio = null;
+
+const storeKey = () => `tiny-voca-ab:${name}:${test.seed}:${test.pairs.length}`;
+const save = () => { try { localStorage.setItem(storeKey(), JSON.stringify(answers)); } catch (e) {} };
+const restore = () => { try { return JSON.parse(localStorage.getItem(storeKey()) || "[]"); } catch (e) { return []; } };
+
+function signTest(wins, losses) {
+  const n = wins + losses;
+  if (!n) return 1;
+  let total = 0, choose = 1;
+  for (let k = 0; k <= n; k++) {
+    if (k >= wins) total += choose;
+    choose = choose * (n - k) / (k + 1);
+  }
+  return total / Math.pow(2, n);
+}
+
+function play(src, button) {
+  if (audio) audio.pause();
+  audio = new Audio(src);
+  audio.addEventListener("ended", () => button.classList.add("done"));
+  audio.play().catch(() => {});      // a quick second click pauses the first sample: not an error
+  button.dataset.started = "1";
+  render.update();
+}
+
+function render() {
+  const index = answers.length;
+  if (index >= test.pairs.length) return results();
+  const pair = test.pairs[index];
+  app.innerHTML = `
+    <div class="muted">Pair ${index + 1} of ${test.pairs.length}</div>
+    <p class="text"></p>
+    <div class="row">
+      <button class="play" id="p1">Play sample 1</button>
+      <button class="play" id="p2">Play sample 2</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="choice" id="c1" disabled>Sample 1 is better</button>
+      <button id="c0" disabled>Can't tell</button>
+      <button class="choice" id="c2" disabled>Sample 2 is better</button>
+    </div>
+    <div class="row" style="margin-top:12px"><button id="back" ${index ? "" : "disabled"}>Back one pair</button></div>
+    <div class="bar"><div style="width:${100 * index / test.pairs.length}%"></div></div>`;
+  app.querySelector(".text").textContent = pair.text;
+  const p1 = document.getElementById("p1"), p2 = document.getElementById("p2");
+  p1.onclick = () => play(pair.first, p1);
+  p2.onclick = () => play(pair.second, p2);
+  const choose = pick => {
+    if (audio) audio.pause();
+    const winner = pick === 0 ? "tie" : (pick === 1 ? pair.first_is : (pair.first_is === "a" ? "b" : "a"));
+    answers.push({ n: pair.n, id: pair.id, set: pair.set, picked: pick, winner, at: new Date().toISOString() });
+    save();
+    render();
+  };
+  document.getElementById("c1").onclick = () => choose(1);
+  document.getElementById("c2").onclick = () => choose(2);
+  document.getElementById("c0").onclick = () => choose(0);
+  document.getElementById("back").onclick = () => { answers.pop(); save(); render(); };
+  render.update = () => {
+    const ready = p1.dataset.started && p2.dataset.started;
+    for (const id of ["c1", "c2", "c0"]) document.getElementById(id).disabled = !ready;
+  };
+}
+render.update = () => {};
+
+function results() {
+  const a = answers.filter(x => x.winner === "a").length;
+  const b = answers.filter(x => x.winner === "b").length;
+  const ties = answers.length - a - b;
+  const leader = a >= b ? "a" : "b";
+  const p = signTest(Math.max(a, b), Math.min(a, b));
+  app.innerHTML = `
+    <div><strong>Done.</strong> Here is what you picked.</div>
+    <table>
+      <tr><th>System</th><th>Preferred</th></tr>
+      <tr><td></td><td>${a}</td></tr>
+      <tr><td></td><td>${b}</td></tr>
+      <tr><td>Can't tell</td><td>${ties}</td></tr>
+    </table>
+    <p class="muted" id="verdict"></p>
+    <div class="row"><button id="download">Download answers</button><button id="again">Start over</button></div>`;
+  const cells = app.querySelectorAll("tr td:first-child");
+  cells[0].textContent = test.a;
+  cells[1].textContent = test.b;
+  document.getElementById("verdict").textContent = a === b
+    ? "No preference either way."
+    : `${test[leader]} was preferred ${Math.max(a, b)} times out of ${a + b} (ties left out). ` +
+      `The chance of a split at least this lopsided with no real difference is ${(100 * p).toFixed(1)}%. ` +
+      (p < 0.01 ? "That is a clear preference." : p < 0.05 ? "That is a likely preference." : "That is not enough to call it.");
+  document.getElementById("download").onclick = () => {
+    const blob = new Blob([JSON.stringify({ test: name, a: test.a, b: test.b, seed: test.seed, answers,
+      summary: { a, b, ties, p_value: p } }, null, 1)], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${name}-answers.json`;
+    link.click();
+  };
+  document.getElementById("again").onclick = () => { answers = []; save(); render(); };
+}
+
+document.addEventListener("keydown", event => {
+  if (event.target.tagName === "INPUT") return;
+  const click = id => { const el = document.getElementById(id); if (el && !el.disabled) { event.preventDefault(); el.click(); } };
+  if (event.key === "1") click("p1");
+  if (event.key === "2") click("p2");
+  if (event.key === "f" || event.key === "F") click("c1");
+  if (event.key === "j" || event.key === "J") click("c2");
+  if (event.key === " ") click("c0");
+});
+
+if (!name) {
+  app.textContent = "Add ?test=<name> to the address. The scoreboard's pairs command prints the full link.";
+} else {
+  fetch(`${encodeURIComponent(name)}.json`).then(r => {
+    if (!r.ok) throw new Error(`${name}.json: ${r.status}`);
+    return r.json();
+  }).then(data => { test = data; answers = restore(); render(); })
+    .catch(error => { app.textContent = `Could not load the test: ${error.message}`; });
+}
+</script>
+</body>
+</html>
