@@ -28,6 +28,7 @@ import torch
 
 from .align import ALIGNER_MODEL, AlignmentSettings, PhoneRecognizer, align_utterance
 from .config import ANNOTATION_VERSION, Config
+from .data import float_wave
 from .journal import append, atomic_json, file_hash, recover
 from .text import (PHONE_SET, SYMBOL_TO_ID, UNK, VOICELESS, VOWEL_SET, Phonemized, frontend_fingerprint,
                    frontend_identity, frontend_runtime, phonemize)
@@ -211,7 +212,7 @@ def main():
                 try:
                     if item["mel"].shape[0] != row["frames"]:
                         raise ValueError("frame count differs from the manifest")
-                    durations, qc = align_utterance(recognizer, phonemes[row["text_hash"]], item["wave"].numpy(),
+                    durations, qc = align_utterance(recognizer, phonemes[row["text_hash"]], float_wave(item["wave"]).numpy(),
                                                     item["prosody"][:, 1].numpy(), config, settings)
                     record = {"id": row["id"], "ok": True, "durations": durations, "qc": qc}
                 except (ValueError, RuntimeError) as error:

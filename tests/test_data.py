@@ -231,5 +231,50 @@ class DataTests(unittest.TestCase):
             self.assertEqual(len(load_acoustic_rows(output, "train", c)), 2)
 
 
+    @unittest.skipUnless(importlib.util.find_spec("librosa"), "requires preparation extras")
+    def test_parallel_preparation_matches_one_process_and_stores_16_bit_audio(self):
+        import soundfile as sf
+        from tiny_voca.data import float_wave
+        from tiny_voca.prepare import prepare_split
+        c = Config()
+        time = np.arange(9000) / 24000
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = []
+            for i in range(6):
+                sf.write(root / f"{i}.wav", 0.1 * np.sin(2 * np.pi * (150 + 20 * i) * time), 24000, subtype="PCM_16")
+                rows.append({"id": f"clip{i}", "text": "Hello.", "voice_id": "M2", "audio": f"{i}.wav"})
+            rows.append({"id": "clip0", "text": "Again.", "voice_id": "M2", "audio": "0.wav"})        # duplicate id
+            rows.append({"id": "short", "text": "Short.", "voice_id": "M2", "audio": "short.wav"})
+            sf.write(root / "short.wav", np.zeros(100), 24000)
+            source = root / "rows.jsonl"
+            source.write_text("".join(json.dumps(r) + "\n" for r in rows))
+            results = {}
+            for workers in (1, 3):
+                output = root / f"features-{workers}"
+                args = SimpleNamespace(output=output, inputs=[source], split="train", text_column="text",
+                                       speaker_column="voice_id", resume=False, workers=workers)
+                output.mkdir()
+                prepare_split(args, c)
+                accepted = {r["id"]: r for r in recover(output / "train.jsonl")}
+                rejected = sorted(r["reason"].split(":")[0] for r in recover(output / "train.rejected.jsonl"))
+                results[workers] = (accepted, rejected, output)
+            (one, one_rejected, one_dir), (three, three_rejected, three_dir) = results[1], results[3]
+            self.assertEqual(sorted(one), [f"clip{i}" for i in range(6)])
+            self.assertEqual(one_rejected, ["ValueError", "ValueError"])
+            self.assertEqual(three_rejected, one_rejected)
+            for identifier, row in one.items():
+                self.assertEqual({k: v for k, v in three[identifier].items() if k != "record_key"},
+                                 {k: v for k, v in row.items() if k != "record_key"})
+                a = torch.load(one_dir / row["path"], weights_only=True)
+                b = torch.load(three_dir / row["path"], weights_only=True)
+                self.assertEqual(a["wave"].dtype, torch.int16)
+                for key in ("wave", "mel", "prosody"):
+                    self.assertTrue(torch.equal(a[key], b[key]), key)
+            first = torch.load(one_dir / one["clip0"]["path"], weights_only=True)
+            original, _ = sf.read(root / "0.wav", dtype="float32")
+            self.assertTrue(torch.equal(float_wave(first["wave"])[:len(original)], torch.from_numpy(original)))   # lossless
+            self.assertEqual(len(load_acoustic_rows(one_dir, "train", c)), 6)
+
 if __name__ == "__main__":
     unittest.main()

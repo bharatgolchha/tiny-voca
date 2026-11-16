@@ -69,8 +69,8 @@ class CorpusTest(unittest.TestCase):
             path = Path("audio") / "92_clean" / "10425" / f"clip_{i}.flac"
             (root / path).parent.mkdir(parents=True, exist_ok=True)
             sf.write(root / path, tone(2.0, 44100), 44100)
-            lines.append({"audio_filepath": str(path), "text": f"Clip {i}.", "text_normalized": f"Clip number {i} here.",
-                          "duration": 2.0})
+            text = "Hello there, how are you today?" if i == 3 else f"Clip number {i} here."     # 3 shares a LibriTTS sentence
+            lines.append({"audio_filepath": str(path), "text": text, "text_normalized": text, "duration": 2.0})
         (root / "92_manifest_clean_train.json").write_text("".join(json.dumps(x) + "\n" for x in lines))
         (root / "92_manifest_other_train.json").write_text(json.dumps(lines[0]) + "\n")             # not used
         return root
@@ -95,6 +95,8 @@ class CorpusTest(unittest.TestCase):
         self.assertNotIn("ltr-19_198_000002_000000", ids)
         self.assertNotIn("ltr-26_495_000000_000000", ids)
         self.assertEqual({r["voice_id"] for r in validation}, {"hifi-92"})                 # LibriTTS speaker has too few
+        self.assertNotIn("Hello there", validation[0]["text"])                              # read twice: never held out
+        self.assertFalse({r["text"] for r in train} & {r["text"] for r in validation})
         self.assertEqual(report["dropped"], {"no normalized text": 1, "sentence is in a test set": 1,
                                              "speaker has too little audio": 1, "too short or too long": 1})
         for row in train + validation:
@@ -102,7 +104,7 @@ class CorpusTest(unittest.TestCase):
             self.assertTrue(Path(row["audio"]).is_absolute())
             info = sf.info(row["audio"])
             self.assertEqual((info.samplerate, info.channels), (24000, 1))
-        hifi = next(r for r in train + validation if r["voice_id"] == "hifi-92")
+        hifi = next(r for r in train + validation if r["source_id"].endswith("clip_0.flac"))
         self.assertTrue(hifi["text"].startswith("Clip number"))
         self.assertAlmostEqual(hifi["seconds"], 2.0, places=2)
         speakers = json.loads((output / "speakers.json").read_text())
@@ -121,8 +123,8 @@ class CorpusTest(unittest.TestCase):
     def test_prepare_accepts_the_rows(self):
         output, _ = self.run_build()
         from tiny_voca.config import Config
-        speakers = [s["id"] for s in json.loads((output / "speakers.json").read_text())]
-        config = Config(speakers=tuple(speakers))
+        config = Config.from_dict(json.loads((output / "config.json").read_text()))
+        self.assertEqual(config.speakers, ("hifi-92", "ltr-19"))
         for row in self.rows(output / "train.jsonl"):
             self.assertIn(row["voice_id"], config.speakers)
             wave, rate = sf.read(Path(output) / row["audio"], dtype="float32")              # absolute path wins

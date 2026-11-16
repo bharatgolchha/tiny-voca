@@ -13,6 +13,12 @@ from torch.nn.utils.rnn import pad_sequence
 
 from .text import PHONE_IDS, SYMBOL_TO_ID, VOWELS, frontend_fingerprint
 
+
+def float_wave(wave):
+    """A stored waveform as float32 in [-1, 1]. Features prepared since 2026-11 keep it
+    as 16-bit integers (the recordings are 16-bit, so nothing is lost); older ones as float32."""
+    return wave.float() / 32768 if wave.dtype == torch.int16 else wave
+
 VOWEL_IDS = frozenset(SYMBOL_TO_ID[v] for v in VOWELS)
 
 
@@ -122,7 +128,7 @@ class AnnotatedDataset:
         item = {
             "tokens": torch.tensor(row["tokens"], dtype=torch.long), "stress": torch.tensor(row["stress"], dtype=torch.long),
             "durations": torch.tensor(row["durations"], dtype=torch.long), "speaker": c.speakers.index(row["speaker"]),
-            "wave": stored["wave"], "mel": stored["mel"],
+            "wave": float_wave(stored["wave"]), "mel": stored["mel"],
             # Continuous log pitch, voiced flag, normalized log energy.
             "prosody": torch.stack((pitch, voiced, (stored["prosody"][:, 2] - c.energy_mean) / c.energy_scale), dim=-1),
             "pitch_trusted": trusted,

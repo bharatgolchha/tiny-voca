@@ -19,7 +19,8 @@ What it does:
   with too few words, or whose text matches a sentence of the frozen test sets
   (``eval/sets/*.jsonl``), compared without case or punctuation.
 * Holds out ``--validation-per-speaker`` clips of every speaker that has at
-  least ``--min-validation-clips`` clips, chosen by a hash of the clip id.
+  least ``--min-validation-clips`` clips, chosen by a hash of the clip id among
+  sentences read only once in the corpus (so no sentence is in both splits).
 * Drops speakers with less than ``--min-speaker-minutes`` of kept audio.
 
 Outputs, in ``--output``:
@@ -29,6 +30,8 @@ Outputs, in ``--output``:
   ``seconds``, ``origin``, ``source_id``, ``source_license``, ``source_url``)
 * ``speakers.json``: every kept speaker with its clips, hours and gender when
   the source lists it, in the order to use for ``Config.speakers``
+* ``config.json``: the default model ``Config`` with these speakers, for
+  ``tiny_voca.prepare --config`` and the later steps
 * ``report.json``: counts, hours and the reasons clips were dropped
 
 The selection depends only on the inputs, so a rerun gives the same files.
@@ -229,6 +232,9 @@ def main(arguments=None):
             dropped[why.split(":")[0]] += 1
             continue
         kept[row["voice_id"]].append(row)
+    # Validation clips must not share a sentence with training (annotation refuses that leakage), so only
+    # sentences read once in the whole corpus can be held out.
+    readings = Counter(text_key(r["text"]) for clips in kept.values() for r in clips)
     seen_ids = set()
     speakers, train, validation = [], [], []
     for voice in sorted(kept):
@@ -239,7 +245,8 @@ def main(arguments=None):
             continue
         held = set()
         if len(clips) >= args.min_validation_clips:
-            held = {r["id"] for r in sorted(clips, key=lambda r: stable(r["id"]))[:args.validation_per_speaker]}
+            unique = [r for r in clips if readings[text_key(r["text"])] == 1]
+            held = {r["id"] for r in sorted(unique, key=lambda r: stable(r["id"]))[:args.validation_per_speaker]}
         for row in clips:
             if row["id"] in seen_ids:
                 raise SystemExit(f"duplicate clip id {row['id']}")
@@ -254,6 +261,9 @@ def main(arguments=None):
     for name, part in (("train", train), ("validation", validation)):
         (output / f"{name}.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in part), encoding="utf-8")
     (output / "speakers.json").write_text(json.dumps(speakers, indent=1) + "\n", encoding="utf-8")
+    from tiny_voca.config import Config
+    config = Config(speakers=tuple(s["id"] for s in speakers)).to_dict()
+    (output / "config.json").write_text(json.dumps(config, indent=1) + "\n", encoding="utf-8")
     hours = defaultdict(float)
     for row in train + validation:
         hours[row["origin"]] += row["seconds"] / 3600
