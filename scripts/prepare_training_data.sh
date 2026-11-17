@@ -6,6 +6,7 @@
 # Every step resumes where it stopped, so after an interruption run it again.
 # Needs the repository installed with its extras:
 #     pip install -e ".[own,prepare,annotate]" git+https://github.com/sarulab-speech/UTMOSv2
+# Step 5 also needs DIZIONE_DATA (see below).
 # Settings: DATA (required), CORPUS (default $DATA/corpus), WORKERS (default: all
 # cores), DEVICE (default cuda), MIRROR (an openslr mirror, see fetch_training_data.sh),
 # QUALITY_CLIPS (clips scored per speaker, default 10), QUALITY_DROP (fraction of
@@ -61,6 +62,12 @@ if step 4; then
 fi
 
 if step 5; then
+  # The released model's own phonemizer (dizione); its data comes with the released weights:
+  #     hf download n4ze3m/tiny-voca --local-dir /workspace/weights   -> DIZIONE_DATA=/workspace/weights/phonemizer
+  export TINY_VOCA_FRONTEND=${TINY_VOCA_FRONTEND:-own}
+  if [[ $TINY_VOCA_FRONTEND == own && -z ${DIZIONE_DATA:-} ]]; then
+    echo "set DIZIONE_DATA to the phonemizer folder of the released weights" >&2; exit 1
+  fi
   REVISION=corpus-$(sha256sum "$CORPUS/train.jsonl" | cut -c1-12)
   log "5/5 phonemes and forced alignment ($REVISION)"
   tiny-voca-annotate --features "$CORPUS/features" --output "$CORPUS/annotated" --dataset-revision "$REVISION" \
