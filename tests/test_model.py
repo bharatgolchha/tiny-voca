@@ -13,7 +13,7 @@ from tiny_voca.data import collate
 from tiny_voca.infer import load_model
 from tiny_voca.inspect import parameter_report
 from tiny_voca.losses import Discriminators
-from tiny_voca.model import SourceFilter, TinyVoca, cepstrum_response, filtered, pulse_train
+from tiny_voca.model import NeuralFilter, SourceFilter, TinyVoca, cepstrum_response, filtered, pulse_train
 from tiny_voca.train import (WEIGHTS, TrainingSystem, atomic_save, export_model, learning_rate, load_compatible, optimize_step,
                              teacher_probability)
 from helpers import SYMBOLS, sample, small_config, write_annotations
@@ -136,6 +136,40 @@ class ModelTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(hidden.grad).all())
         self.assertGreater(float(hidden.grad[1, :7].abs().sum()), 0)
         self.assertEqual(float(hidden.grad[1, 7:].abs().sum()), 0.0)        # padded frames cannot influence audio
+
+    def test_neural_head_is_differentiable_respects_lengths_and_ignores_padding(self):
+        from dataclasses import replace
+        c = replace(small_config(), vocoder="neural", head_channels=32, head_layers=2)
+        head = NeuralFilter(c).eval()
+        with torch.no_grad():
+            head.output.weight.normal_(std=0.05)
+        hidden = torch.randn(2, 12, c.channels, requires_grad=True)
+        f0 = torch.full((2, 12), 180.0)
+        noise = torch.randn(2, 12 * c.hop)
+        lengths = torch.tensor([12, 7])
+        wave = head(hidden, f0, lengths, noise=noise)
+        self.assertEqual(wave.shape, (2, 12 * c.hop))
+        self.assertEqual(float(wave[1, 7 * c.hop:].abs().max()), 0.0)
+        wave.square().mean().backward()
+        self.assertTrue(torch.isfinite(hidden.grad).all())
+        self.assertGreater(float(hidden.grad[1, :7].abs().sum()), 0)
+        self.assertEqual(float(hidden.grad[1, 7:].abs().sum()), 0.0)        # padded frames cannot influence audio
+        with torch.no_grad():
+            alone = head(hidden[1:, :7], f0[1:, :7], lengths[1:], noise=noise[1:, :7 * c.hop])
+        torch.testing.assert_close(wave[1, :7 * c.hop].detach(), alone[0], atol=5e-4, rtol=1e-3)
+        self.assertGreater(float(alone.abs().max()), 0.01)
+
+    def test_neural_head_model_builds_and_synthesizes(self):
+        from dataclasses import replace
+        c = replace(small_config(), vocoder="neural", head_channels=32, head_layers=2)
+        model = TinyVoca(c).eval()
+        self.assertIsInstance(model.vocoder, NeuralFilter)
+        a = sample(c)
+        wave, samples, _ = model.synthesize(a["tokens"][None], a["stress"][None], torch.tensor([len(SYMBOLS)]), torch.tensor([0]))
+        self.assertEqual(wave.shape[1], int(samples[0]))
+        self.assertTrue(torch.isfinite(wave).all())
+        with self.assertRaises(ValueError):
+            replace(c, head_fft=512)
 
     def test_both_training_phases_update_every_inference_module(self):
         c = small_config()

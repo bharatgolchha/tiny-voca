@@ -238,6 +238,82 @@ class SourceFilter(nn.Module):
             return wave * audible
 
 
+class ConvNeXtBlock(nn.Module):
+    """Depthwise convolution over frames, then a per-frame MLP, as in ConvNeXt/Vocos."""
+
+    def __init__(self, channels, expansion, kernel, scale):
+        super().__init__()
+        self.depthwise = nn.Conv1d(channels, channels, kernel, padding=kernel // 2, groups=channels)
+        self.norm = nn.LayerNorm(channels)
+        self.up = nn.Linear(channels, expansion * channels)
+        self.down = nn.Linear(expansion * channels, channels)
+        self.gamma = nn.Parameter(torch.full((channels,), scale))
+
+    def forward(self, x, mask):
+        y = self.depthwise((x * mask[..., None]).transpose(1, 2)).transpose(1, 2)
+        y = self.down(F.gelu(self.up(self.norm(y))))
+        return (x + self.gamma * y) * mask[..., None]
+
+
+class NeuralFilter(nn.Module):
+    """Harmonic-plus-noise synthesis whose filters come from a small ConvNeXt.
+
+    The same pitch-driven pulse train and white noise as ``SourceFilter`` are the
+    excitation, so pitch stays exactly controllable. Instead of 80 cepstral
+    coefficients from one linear layer, a ConvNeXt over frames predicts, for
+    every frame and every one of ``head_fft // 2 + 1`` bins, a harmonic gain and
+    phase shift and a noise gain. Filtering is a product in the STFT domain
+    (hop = the acoustic hop, 75% overlap), as in Vocos.
+    """
+
+    def __init__(self, c):
+        super().__init__()
+        self.config = c
+        self.bins = c.head_fft // 2 + 1
+        self.input = nn.Linear(c.channels + 1, c.head_channels)
+        self.blocks = nn.ModuleList(ConvNeXtBlock(c.head_channels, c.head_expansion, c.head_kernel, 1.0 / c.head_layers)
+                                    for _ in range(c.head_layers))
+        self.norm = nn.LayerNorm(c.head_channels)
+        self.output = nn.Linear(c.head_channels, 3 * self.bins)
+        nn.init.zeros_(self.output.weight)          # start quiet and spectrally flat, like SourceFilter
+        nn.init.zeros_(self.output.bias)
+        self.output.bias.data[:self.bins] = -1.5
+        self.output.bias.data[2 * self.bins:] = -2.5
+        self.register_buffer("window", torch.hann_window(c.head_fft), persistent=False)
+
+    def forward(self, hidden, f0, lengths, noise=None, phase=None):
+        c = self.config
+        frames = hidden.shape[1]
+        samples = frames * c.hop
+        with torch.autocast(device_type=hidden.device.type, enabled=False):
+            hidden = hidden.float()
+            mask = length_mask(lengths, frames)
+            audible = length_mask(lengths * c.hop, samples)
+            last = (lengths - 1).clamp_min(0)[:, None]
+            f0 = f0.float().gather(1, torch.minimum(torch.arange(frames, device=f0.device)[None], last))
+            x = self.input(torch.cat((hidden, torch.log(f0 / c.pitch_reference_hz)[..., None]), dim=-1)) * mask[..., None]
+            for block in self.blocks:
+                x = block(x, mask)
+            out = self.output(self.norm(x))
+            # STFT frames of the padded excitation: frames + head_fft // (2 * hop) + 1. The ones past an
+            # utterance's end repeat its last frame, so padding never changes real audio.
+            extra = c.head_fft // (2 * c.hop) + 1
+            index = torch.minimum(torch.arange(frames + extra, device=hidden.device)[None].expand(len(lengths), -1), last)
+            out = out.gather(1, index[..., None].expand(-1, -1, out.shape[-1])).transpose(1, 2)    # [B, 3*bins, frames']
+            gain, shift, noise_gain = out.split(self.bins, dim=1)
+            harmonic = torch.polar(torch.exp(gain.clamp(-14, 6)), math.pi * torch.tanh(shift))
+            breath = torch.exp(noise_gain.clamp(-14, 6))
+            pulses = pulse_train(f0, c.sample_rate, c.hop, c.harmonic_limit, phase) * audible
+            if noise is None:
+                noise = torch.randn(hidden.shape[0], samples, device=hidden.device)
+            pad = c.head_fft // 2
+            stft = lambda wave: torch.stft(F.pad(wave, (0, pad)), c.head_fft, c.hop, window=self.window, center=True,
+                                           pad_mode="constant", return_complex=True)
+            spectrum = stft(pulses) * harmonic + stft(noise * audible) * breath
+            wave = torch.istft(spectrum, c.head_fft, c.hop, window=self.window, center=True, length=samples + pad)[:, :samples]
+            return wave * audible
+
+
 class TinyVoca(nn.Module):
     def __init__(self, config=Config()):
         super().__init__()
@@ -257,7 +333,7 @@ class TinyVoca(nn.Module):
         self.prosody_head = nn.Linear(c.channels, 3)
         self.prosody_projection = nn.Linear(3, c.channels)
         self.acoustic_stack = Stack(c, c.acoustic_layers)
-        self.vocoder = SourceFilter(c)
+        self.vocoder = NeuralFilter(c) if c.vocoder == "neural" else SourceFilter(c)
         phones = torch.zeros(c.vocab_size, dtype=torch.bool)
         phones[sorted(PHONE_IDS)] = True
         self.register_buffer("phone_tokens", phones, persistent=False)

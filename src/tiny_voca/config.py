@@ -42,6 +42,15 @@ class Config:
     cep_anti: int = 16
     noise_cep: int = 32
     harmonic_limit: float = 0.47
+    # Waveform head: "source_filter" (the released model: linear cepstrum heads) or
+    # "neural" (a ConvNeXt that predicts per-bin harmonic and noise filters at frame
+    # rate, STFT size head_fft with hop = hop; see model.NeuralFilter).
+    vocoder: str = "source_filter"
+    head_fft: int = 1024
+    head_channels: int = 256
+    head_layers: int = 6
+    head_expansion: int = 3
+    head_kernel: int = 7
     max_tokens: int = 512
     max_frames: int = 3000
     mel_mean: float = -5.0
@@ -65,6 +74,11 @@ class Config:
             raise ValueError("cepstrum orders must be well below half the synthesis FFT size")
         if min(self.encoder_layers, self.prosody_layers, self.acoustic_layers, self.kernel) < 1 or not self.kernel % 2:
             raise ValueError("layer counts must be positive and the kernel odd")
+        if self.vocoder not in ("source_filter", "neural"):
+            raise ValueError("vocoder must be 'source_filter' or 'neural'")
+        if self.vocoder == "neural" and (self.head_fft != 4 * self.hop or min(self.head_channels, self.head_layers, self.head_expansion) < 1
+                                         or not self.head_kernel % 2):
+            raise ValueError("the neural head needs head_fft = 4 * hop, positive sizes and an odd kernel")
         if min(self.mel_scale, self.energy_scale) <= 0 or not 0 < self.harmonic_limit < 0.5:
             raise ValueError("invalid normalization scale or harmonic limit")
 
