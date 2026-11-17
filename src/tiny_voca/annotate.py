@@ -328,7 +328,10 @@ def main():
         for voice, table in phone_frames.items()}
     summary["pause_tokens"] = {symbol: {"count": pause_tokens[symbol], "with_frames": round(pause_nonzero[symbol] / pause_tokens[symbol], 4)}
                                for symbol in pause_tokens}
-    complete = not args.limit and set(args.splits) == set(SPLITS)
+    # Complete when every split that was prepared got annotated: a corpus without a test split
+    # (the frozen eval sets play that part) is complete with train and validation.
+    prepared = {split for split in SPLITS if (args.features / (split + ".jsonl")).exists()}
+    complete = not args.limit and prepared <= set(args.splits)
     atomic_json(args.output / "summary.json", summary)
     atomic_json(metadata_path, {"identity": identity, "fingerprint": fingerprint, "complete": complete, "stage": args.stage,
                                 "acoustic_root": str(args.features.resolve()), "limits": limits,
