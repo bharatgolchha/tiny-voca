@@ -6,7 +6,8 @@
 # Every step resumes where it stopped, so after an interruption run it again.
 # Needs the repository installed with its extras:
 #     pip install -e ".[own,prepare,annotate]" git+https://github.com/sarulab-speech/UTMOSv2
-# Step 5 also needs DIZIONE_DATA (see below).
+# Step 5 also needs DIZIONE_DATA (see below). Set HF_HOME to a folder on the persistent
+# volume (for example /workspace/hf) so downloaded models survive between machines.
 # Settings: DATA (required), CORPUS (default $DATA/corpus), WORKERS (default: all
 # cores), DEVICE (default cuda), MIRROR (an openslr mirror, see fetch_training_data.sh),
 # QUALITY_CLIPS (clips scored per speaker, default 10), QUALITY_DROP (fraction of
@@ -68,6 +69,8 @@ if step 5; then
   if [[ $TINY_VOCA_FRONTEND == own && -z ${DIZIONE_DATA:-} ]]; then
     echo "set DIZIONE_DATA to the phonemizer folder of the released weights" >&2; exit 1
   fi
+  # The aligner loads its phoneme recogniser offline, so fetch it once (cached under HF_HOME; keep that on the volume).
+  python -c "from huggingface_hub import snapshot_download; from tiny_voca.align import ALIGNER_MODEL; print(snapshot_download(ALIGNER_MODEL))"
   REVISION=corpus-$(sha256sum "$CORPUS/train.jsonl" | cut -c1-12)
   log "5/5 phonemes and forced alignment ($REVISION)"
   tiny-voca-annotate --features "$CORPUS/features" --output "$CORPUS/annotated" --dataset-revision "$REVISION" \
