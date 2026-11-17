@@ -308,6 +308,8 @@ def main():
     parser.add_argument("--recorded-voicing", action="store_true", help="Use the pitch tracker's voicing as it is, "
                         "without marking vowel frames voiced")
     parser.add_argument("--no-preload", action="store_true", help="Load feature files lazily instead of before the first step")
+    parser.add_argument("--max-parameters", type=int, default=5_000_000, help="Refuse a model with more inference parameters "
+                        "(the neural waveform head needs about 7.5M)")
     args = parser.parse_args()
     if min(args.steps, args.batch_frames, args.max_batch, args.save_every, args.keep_every, args.log_every, args.crops, args.gan_ramp) < 1:
         parser.error("steps, batch limits and intervals must be positive")
@@ -351,7 +353,7 @@ def main():
         validation.preload(validation_indices)
     system, critics = TrainingSystem(c).to(args.device), Discriminators().to(args.device)
     count = sum(p.numel() for p in system.model.parameters())
-    if count > 5_000_000:
+    if count > args.max_parameters:
         raise ValueError(f"inference parameter budget exceeded: {count:,}")
     optimizer = torch.optim.AdamW(system.parameters(), lr=args.learning_rate, betas=(0.8, 0.99), weight_decay=0.01)
     critic_optimizer = torch.optim.AdamW(critics.parameters(), lr=args.learning_rate, betas=(0.8, 0.99), weight_decay=0.0)
